@@ -36,13 +36,29 @@ struct
     
     let get_key x = 
       try
-        HM.find keys x 
+        let v = HM.find keys x in
+        if v > 0 then begin
+          incr Goblintutil.vars;
+        last_key := !last_key - 1;
+        HM.replace keys x !last_key;
+        !last_key
+        end else v
       with Not_found -> 
         incr Goblintutil.vars;
         last_key := !last_key - 1;
         HM.add keys x !last_key;
         !last_key
-                        
+
+    let get_index_opt c =
+      try (HM.find keys c, true) 
+      with Not_found -> 
+        incr Goblintutil.vars;
+        HM.add keys c 999;
+        (999, false)
+     
+     
+    let get_key_opt x =  HM.find keys x
+
     let get_index c = 
       try (HM.find keys c, true) 
       with Not_found -> 
@@ -53,6 +69,17 @@ struct
       
       let to_list () = vals 
   end  
+
+  (** Helper module for timestamps *)
+  module TS =
+  struct
+    let tstamps   = HM.create 1024
+    let currstamp = ref 0
+
+    let get_value x = h_find_default tstamps x !currstamp
+    let update_value x = HM.replace tstamps x !currstamp
+    let tick () = currstamp := !currstamp + 1
+  end
     
   (** Helper module for values of global contributions. *)
   module XY = 
@@ -135,14 +162,17 @@ struct
   let solve box st list = 
     let stable = HM.create 1024 in
     let infl   = HM.create 1024 in
+    let deps   = HM.create 1024 in
     let set    = HM.create 1024 in
     let wpoint = HM.create 1024 in
     let work   = ref H.empty    in
+
+    let backedge  = ref false      in
         
     let _ = List.iter (fun (x,v) -> XY.set_value (x,x) v; T.update set x (P.single x)) st in
     let _ = work := H.merge (H.from_list list) !work in 
     let _ = List.iter (fun x -> if (not LIM_WP.value) then L.add infl x x) list in 
-    
+ 
     let eq x get set = 
 	    match S.system x with
         | None -> S.Dom.bot ()
@@ -159,7 +189,7 @@ struct
     
     (*let box' x xk y z = D.widen y (D.join y z) in*)
     let box' x xk y z = box x y z  in
-    
+
     let restart x = 
       let (sk,_) = X.get_index x in
       let rec handle_one x =
@@ -185,6 +215,10 @@ struct
       let (xi,_) = X.get_index x in
       fun y ->
         let (i,nonfresh) = X.get_index y in
+        let _ = if (TS.get_value x) <= (TS.get_value y) && (X.get_key_opt x) >= (X.get_key_opt y) then begin
+           ignore ( Pretty.printf "backedge true: from %a with stamp %d\n" S.Var.pretty_trace y ( TS.get_value y));
+           backedge := true
+          end in
         let _ = if i<=xi then HM.replace wpoint x () in
         let _ = if nonfresh then () else solve y in
         let _ = L.add infl y x in
@@ -220,20 +254,54 @@ struct
             let xs = P.to_list p in 
             (*ignore (Pretty.printf "%d var %a\n\n" (List.length list) S.Var.pretty_trace x); *)
             List.fold_left (fun a z -> D.cup a (XY.get_value (z,x))) a xs
+   
+    and backeval x y =   
+       ignore (Pretty.printf "backeval: %a\n" S.Var.pretty_trace x);
+       let (i, nonfresh) = X.get_index_opt y in
+       let _ = L.add infl y x in        
+       let _ = L.add deps x y in     
+       if not nonfresh then begin 
+          let _ = eq y (backeval y) (side y) in
+          let _ = if L.sub deps y == [] then  begin
+	      let h = List.fold_left H.insert (!work) [y] in
+	         ignore (Pretty.printf "add %a to work list\n" S.Var.pretty_trace y);		
+	         work := h ;
+	  end in   
+          ignore (Pretty.printf "add %a to influence list of %a\n" S.Var.pretty_trace x S.Var.pretty_trace y);
+          X.get_value y
+       end else
+          X.get_value y
+
+    and backsolve x =       
+       ignore (Pretty.printf "backsolve: %a\n" S.Var.pretty_trace x);
+       let (i, nonfresh) = X.get_index_opt x in
+       if not nonfresh then eq x (backeval x) (side x) else X.get_value x
 
     and solve x = 
       if not (P.has_item stable x) then begin
         incr Goblintutil.evals;
+        let _ = backsolve x in
+        ignore ( Pretty.printf "-------------------- SOLVING %a PRIO %d TS %d\n" S.Var.pretty_trace x (X.get_key_opt x) (TS.get_value x) ) ;
+        (* HM.iter (fun v k -> ignore (Pretty.printf "key(%a) = %d\n" S.Var.pretty_trace v k)) X.keys; *)
+
         let _ = P.insert stable x in
         let old = X.get_value x in
+	
+        backedge := false;
+
         let tmp = do_side x (eq x (eval x) (side x)) in 
         let rstrt = RES.value && D.leq tmp old in
-        let tmp = if (not LIM_WP.value) || HM.mem wpoint x then box' x (X.get_key x) old tmp else tmp in
+
+	ignore (Pretty.printf "OLD\n%a\nNEW\n%a\n" S.Dom.pretty old S.Dom.pretty tmp);
+        let tmp = if (not LIM_WP.value) || (HM.mem wpoint x && !backedge) then box' x (X.get_key x) old tmp else tmp in
+        ignore (Pretty.printf "WIDEN %b BACKEDGE %b \n%a\n"  (HM.mem wpoint x) (!backedge) S.Dom.pretty tmp);
+
+	let _ = TS.tick () in
+ 	let _ = TS.update_value x in
         if D.eq tmp old then 
           loop (X.get_key x)
         else begin 
           let _ = X.set_value x tmp in
-
           if rstrt then 
             restart x 
           else
