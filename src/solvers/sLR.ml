@@ -552,8 +552,6 @@ struct
     let set    = HM.create 1024 in
     let wpoint = HM.create 1024 in
     let work   = ref H.empty    in
-
-    let backedge  = ref false      in
         
     let _ = List.iter (fun (x,v) -> XY.set_value (x,x) v; T.update set x (P.single x)) st in
     let _ = work := H.merge (H.from_list list) !work in 
@@ -602,11 +600,10 @@ struct
       fun y ->       
 	if  X.fresh_key y then backeval x y else begin 
           let (i,nonfresh) = X.get_index y in
-          let _ = if (TS.get_value x) <= (TS.get_value y) && (X.get_key_opt x) >= (X.get_key_opt y) then begin
+          let _ = if i<=xi && (TS.get_value x) <= (TS.get_value y) then begin
              if (!Errormsg.debugFlag) then ignore ( Pretty.printf "backedge true: from %a with stamp %d\n" S.Var.pretty_trace y ( TS.get_value y));
-             backedge := true
-            end in
-          let _ = if i<=xi then HM.replace wpoint x () in
+ 	     HM.replace wpoint x () 
+	  end in
           let _ = if nonfresh then () else solve y in
           let _ = L.add infl y x in
           X.get_value y
@@ -629,7 +626,7 @@ struct
         let (i,nonfresh) = X.get_index y in
 
         if nonfresh then
-	  let _ =  ignore (Pretty.printf "side effect on %a prop %d\n" S.Var.pretty_trace y (X.get_key_opt y)) in
+	  let _ =  if (!Errormsg.debugFlag) then  ignore (Pretty.printf "side effect on %a prop %d\n" S.Var.pretty_trace y (X.get_key_opt y)) in
           let _ = P.rem_item stable y in 
           work := H.insert (!work) y
         else 
@@ -652,7 +649,7 @@ struct
        if not nonfresh then begin 
           let _ = eq y (backeval y) (backside y) in
           let _ = if L.sub deps y == [] then  begin
-	      let h = List.fold_left H.insert (!work) [y] in
+	      let h = List.fold_left H.insert (!work) [y] in 
 	         if (!Errormsg.debugFlag) then ignore (Pretty.printf "add %a to work list\n" S.Var.pretty_trace y);		
 	         work := h ;
 	  end in   
@@ -680,33 +677,33 @@ struct
         let _ = P.insert stable x in
         let old = X.get_value x in
 	
-        backedge := false;
-
         let tmp = do_side x (eq x (eval x) (side x)) in 
         let rstrt = RES.value && D.leq tmp old in
 
 	if (!Errormsg.debugFlag) then ignore (Pretty.printf "OLD\n%a\nNEW\n%a\n" S.Dom.pretty old S.Dom.pretty tmp);
-        let tmp = if (not LIM_WP.value) || (HM.mem wpoint x && !backedge) then box' x (X.get_key x) old tmp else tmp in
-        if (!Errormsg.debugFlag) then ignore (Pretty.printf "WIDEN %b BACKEDGE %b \n%a\n"  (HM.mem wpoint x) (!backedge) S.Dom.pretty tmp);
+        let tmp = if (not LIM_WP.value) || HM.mem wpoint x then box' x (X.get_key x) old tmp else tmp in
+        if (!Errormsg.debugFlag) then ignore (Pretty.printf "WIDEN %b\n%a\n"  (HM.mem wpoint x)  S.Dom.pretty tmp);
 
 	let _ = TS.tick () in
  	let _ = TS.update_value x in
         if D.eq tmp old then 
-          loop (X.get_key x)
+          let _ = HM.remove wpoint x in   loop (X.get_key x)
         else begin 
           let _ = X.set_value x tmp in
           if rstrt then 
             restart x 
           else
-            let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in
+	    (* we should remove this without penaling precision *)
+            let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in 
             let w = L.sub infl x in
             let _ = L.rem_item infl x in
             let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in
             let h = List.fold_left H.insert (!work) w in
             let _ = work := h in
-                    List.iter (P.rem_item stable) w;
-                    
-          loop (X.get_key x) 
+               List.iter (P.rem_item stable) w;   
+
+ 	  (* is it possible to avoid removing wpoint here? *)
+          let _ = HM.remove wpoint x in  loop (X.get_key x) 
         end 
       end
         
@@ -758,7 +755,7 @@ struct
       else if b1 then 
         f_le ()
       else if b2 then
-	let _ = ignore (Pretty.printf "Instr: %a\nSLR+\n%a\nSLR++\n%a\n" S.Var.pretty_trace k S.Dom.pretty v2 S.Dom.pretty v1) in
+	let _ =  if (!Errormsg.debugFlag) then ignore (Pretty.printf "Instr: %a\nSLR+\n%a\nSLR++\n%a\n" S.Var.pretty_trace k S.Dom.pretty v2 S.Dom.pretty v1) in
           f_gr ()
       else 
         f_uk ()
