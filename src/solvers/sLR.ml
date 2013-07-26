@@ -694,11 +694,9 @@ struct
           if rstrt then 
             restart x 
           else
-	    (* we should remove this without penaling precision *)
             let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in 
             let w = L.sub infl x in
             let _ = L.rem_item infl x in
-            let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in
             let h = List.fold_left H.insert (!work) w in
             let _ = work := h in
                List.iter (P.rem_item stable) w;   
