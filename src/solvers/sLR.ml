@@ -425,10 +425,11 @@ struct
         let v = HM.find keys x in
         if v > 0 then begin
           incr Goblintutil.vars;
-        last_key := !last_key - 1;
-        HM.replace keys x !last_key;
-        !last_key
-        end else v
+          last_key := !last_key - 1;
+          HM.replace keys x !last_key;
+          !last_key
+        end else
+          v
       with Not_found -> 
         incr Goblintutil.vars;
         last_key := !last_key - 1;
