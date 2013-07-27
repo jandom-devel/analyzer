@@ -553,6 +553,7 @@ struct
     let set    = HM.create 1024 in
     let wpoint = HM.create 1024 in
     let work   = ref H.empty    in
+    let entryp = ref [] in
         
     let _ = List.iter (fun (x,v) -> XY.set_value (x,x) v; T.update set x (P.single x)) st in
     let _ = work := H.merge (H.from_list list) !work in 
@@ -599,7 +600,7 @@ struct
     let rec eval x =
       let (xi,_) = X.get_index x in
       fun y ->       
-	if  X.fresh_key y then backeval x y else begin 
+	if  X.fresh_key y then backeval2 x y else begin
           let (i,nonfresh) = X.get_index y in
           let _ = if i<=xi && (TS.get_value x) <= (TS.get_value y) then begin
              if (!Errormsg.debugFlag) then ignore ( Pretty.printf "backedge true: from %a with stamp %d\n" S.Var.pretty_trace y ( TS.get_value y));
@@ -611,7 +612,7 @@ struct
         end  
                     
     and side x y d = 
-      HM.replace wpoint y ();
+      if (X.get_index x) <= (X.get_index  y) then HM.replace wpoint y ();
       
       let _ = 
         match T.sub set y with 
@@ -628,7 +629,7 @@ struct
 
         if nonfresh then
 	  let _ =  if (!Errormsg.debugFlag) then  ignore (Pretty.printf "side effect on %a prop %d\n" S.Var.pretty_trace y (X.get_key_opt y)) in
-          let _ = P.rem_item stable y in 
+          let _ = P.rem_item stable y in
           work := H.insert (!work) y
         else 
           solve y
@@ -649,21 +650,27 @@ struct
        let _ = L.add deps x y in     
        if not nonfresh then begin 
           let _ = eq y (backeval y) (backside y) in
-          let _ = if L.sub deps y == [] then  begin
-	      let h = List.fold_left H.insert (!work) [y] in 
-	         if (!Errormsg.debugFlag) then ignore (Pretty.printf "add %a to work list\n" S.Var.pretty_trace y);		
-	         work := h ;
-	  end in   
-          if (!Errormsg.debugFlag) then ignore (Pretty.printf "add %a to influence list of %a\n" S.Var.pretty_trace x S.Var.pretty_trace y);
+          let _ = if L.sub deps y == [] then entryp := y::(!entryp) in          
           X.get_value y
        end else
           X.get_value y
 
-    and backsolve x =       
-       if (!Errormsg.debugFlag) then ignore (Pretty.printf "backsolve: %a\n" S.Var.pretty_trace x);
-       let (i, nonfresh) = X.get_index_opt x in
-       let _ = if not nonfresh then eq x (backeval x) (backside x) else X.get_value x in	
-       ()
+    and backeval2 x y =
+       entryp := [];
+       let s = backeval x y in
+       let _ = makeprio (!entryp) []  in
+       let _ = work := H.merge (H.from_list (!entryp)) !work in
+       s
+
+    and makeprio l mem =
+        if (!Errormsg.debugFlag) then  List.iter (fun v -> ignore (Pretty.printf "%a\n" S.Var.pretty_trace v)) l;
+	match l with
+          | [] -> ()
+          | x::l1 ->
+  	       let _ = X.get_key x in
+	       let newmem = x::mem  in
+	       let filtervar = fun v -> not (List.mem v newmem) in
+               makeprio (List.append  (List.rev (List.filter filtervar  (L.sub infl x))) l1) newmem
 
     and backside x y d = ()
 
@@ -671,7 +678,6 @@ struct
       if not (P.has_item stable x) then begin
         incr Goblintutil.evals;
 	if (!Errormsg.debugFlag) then ignore ( Pretty.printf "-------------------- SOLVING %a\n" S.Var.pretty_trace x );
-        let _ = backsolve x in
         if (!Errormsg.debugFlag) then ignore ( Pretty.printf "PRIO %d TS %d\n"  (X.get_key_opt x) (TS.get_value x) );
         if (!Errormsg.debugFlag) then HM.iter (fun v k -> ignore (Pretty.printf "key(%a) = %d\n" S.Var.pretty_trace v k)) X.keys; 
 
