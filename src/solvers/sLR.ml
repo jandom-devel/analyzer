@@ -186,6 +186,7 @@ struct
       fun y ->
         let (i,nonfresh) = X.get_index y in
         let _ = if i<=xi then HM.replace wpoint x () in
+        (* I think this  is better: let _ = if xi <= i then HM.replace wpoint y () in *)
         let _ = if nonfresh then () else solve y in
         let _ = L.add infl y x in
         X.get_value y
@@ -399,6 +400,12 @@ module MakeBoxSolverNew =
   functor (S:EqConstrSys) ->
   functor (HM:Hash.H with type key = S.v) ->
 struct
+  let priosum  = true	(* give priorities in increasing order *)
+  let oldorder = false  (* give priorities from the exit point of graphs *)
+  let newwidening = true       (* use new widening *)
+  let oldwidening = false       (* use old widening *)
+  let tswidening = false      (* use timestamp widening *)
+  let localization = true     (* remove widening marking after evaluation *)
 
   let h_find_option h x =
     try Some (HM.find h x)
@@ -423,16 +430,16 @@ struct
     let get_key x = 
       try
         let v = HM.find keys x in
-        if v > 0 then begin
+        if v = (-99999) then begin
           incr Goblintutil.vars;
-          last_key := !last_key - 1;
+          last_key := if priosum then !last_key + 1 else !last_key - 1;
           HM.replace keys x !last_key;
           !last_key
         end else
           v
       with Not_found -> 
         incr Goblintutil.vars;
-        last_key := !last_key - 1;
+        last_key := if priosum then !last_key + 1 else !last_key - 1;
         HM.add keys x !last_key;
         !last_key
 
@@ -440,17 +447,16 @@ struct
       try (HM.find keys c, true) 
       with Not_found -> 
         incr Goblintutil.vars;
-        HM.add keys c 999;
-        (999, false)
+        HM.add keys c (-99999);
+        (-99999, false)
      
-     
-    let get_key_opt x =  HM.find keys x
+    let get_key_opt x =  try  HM.find keys x with Not_found -> (-1000000)
 
     let get_index c = 
       try (HM.find keys c, true) 
       with Not_found -> 
         incr Goblintutil.vars;
-        last_key := !last_key - 1; 
+        last_key := if priosum then !last_key + 1 else !last_key - 1;
         HM.add keys c !last_key;
         (!last_key, false)
       
@@ -602,10 +608,13 @@ struct
       fun y ->       
 	if  X.fresh_key y then backeval2 x y else begin
           let (i,nonfresh) = X.get_index y in
-          let _ = if i<=xi && (TS.get_value x) <= (TS.get_value y) then begin
+          (*qlet _ = if i <= xi && TS.get_value x <= TS.get_value y then begin
              if (!Errormsg.debugFlag) then ignore ( Pretty.printf "backedge true: from %a with stamp %d\n" S.Var.pretty_trace y ( TS.get_value y));
  	     HM.replace wpoint x () 
-	  end in
+	  end in*)
+          let _ = if tswidening && i <= xi && TS.get_value x <= TS.get_value y then HM.replace wpoint x () in
+          let _ = if oldwidening && i <= xi then HM.replace wpoint x () in 
+          let _ = if newwidening && xi <= i then HM.replace wpoint y () in 
           let _ = if nonfresh then () else solve y in
           let _ = L.add infl y x in
           X.get_value y
@@ -650,7 +659,8 @@ struct
        let _ = L.add deps x y in     
        if not nonfresh then begin 
           let _ = eq y (backeval y) (backside y) in
-          let _ = if L.sub deps y == [] then entryp := y::(!entryp) in          
+          let _ = if not oldorder && L.sub deps y == [] then entryp := y::(!entryp) in          	
+          let _ = if oldorder then  entryp := y::(!entryp) in
           X.get_value y
        end else
           X.get_value y
@@ -670,7 +680,8 @@ struct
   	       let _ = X.get_key x in
 	       let newmem = x::mem  in
 	       let filtervar = fun v -> not (List.mem v newmem) in
-               makeprio (List.append  (List.rev (List.filter filtervar  (L.sub infl x))) l1) newmem
+		let toadd = if oldorder then L.sub deps x else L.sub infl x in
+               makeprio (List.append  (List.rev (List.filter filtervar toadd)) l1) newmem
 
     and backside x y d = ()
 
@@ -678,7 +689,8 @@ struct
       if not (P.has_item stable x) then begin
         incr Goblintutil.evals;
 	if (!Errormsg.debugFlag) then ignore ( Pretty.printf "-------------------- SOLVING %a\n" S.Var.pretty_trace x );
-        if (!Errormsg.debugFlag) then ignore ( Pretty.printf "PRIO %d TS %d\n"  (X.get_key_opt x) (TS.get_value x) );
+        if (!Errormsg.debugFlag) then ignore ( Pretty.printf "PRIO %d"  (X.get_key_opt x) );
+        if (!Errormsg.debugFlag && tswidening) then ignore (Pretty.printf " TS %d\n"  (TS.get_value x) );
         if (!Errormsg.debugFlag) then HM.iter (fun v k -> ignore (Pretty.printf "key(%a) = %d\n" S.Var.pretty_trace v k)) X.keys; 
 
         let _ = P.insert stable x in
@@ -691,10 +703,14 @@ struct
         let tmp = if (not LIM_WP.value) || HM.mem wpoint x then box' x (X.get_key x) old tmp else tmp in
         if (!Errormsg.debugFlag) then ignore (Pretty.printf "WIDEN %b\n%a\n"  (HM.mem wpoint x)  S.Dom.pretty tmp);
 
-	let _ = TS.tick () in
- 	let _ = TS.update_value x in
+	let _ = if tswidening then begin
+            TS.tick ();
+            TS.update_value x
+        end in
+
         if D.eq tmp old then 
-          let _ = HM.remove wpoint x in   loop (X.get_key x)
+          let _ = if localization then HM.remove wpoint x in 
+          loop (X.get_key x)
         else begin 
           let _ = X.set_value x tmp in
           if rstrt then 
@@ -735,6 +751,7 @@ struct
     X.to_list ()
 
 end
+
 
 module MakeSLRNewCMP =
   functor (S:EqConstrSys) ->
