@@ -133,8 +133,8 @@ struct
      let cup = join
      let cap = meet
   end
-                
-  let solve box st list = 
+
+  let solve box st list =
     let stable = HM.create 1024 in
     let infl   = HM.create 1024 in
     let wpoint = HM.create 1024 in
@@ -161,25 +161,25 @@ struct
     (*let box' x xk y z = D.widen y (D.join y z) in*)
     let box' x xk y z = box x y z  in
     
-    let restart x = 
+    let restart x =
       let (sk,_) = X.get_index x in
       let rec handle_one x =
         let (k,_) = X.get_index x in
         let _ = work := H.insert !work x in
         let _ = P.rem_item stable x in
         if k >= sk then () else
-        let _ = X.set_value x (D.bot ()) in
-        (*ignore @@ Pretty.printf "  also restarting %d: %a\n" k S.Var.pretty_trace x;*)
-        let w = L.sub infl x in
-        let _ = L.rem_item infl x in
-        (*let _ = L.add infl x x in *)
-        List.iter handle_one w 
-      in 
+          let _ = X.set_value x (D.bot ()) in
+          (*ignore @@ Pretty.printf " also restarting %d: %a\n" k S.Var.pretty_trace x;*)
+          let w = L.sub infl x in
+          let _ = L.rem_item infl x in
+          (*let _ = L.add infl x x in *)
+          List.iter handle_one w
+      in
       (*ignore @@ Pretty.printf "restarting %d: %a\n" sk S.Var.pretty_trace x;*)
       let w = L.sub infl x in
       let _ = L.rem_item infl x in
-      let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in 
-      List.iter handle_one w 
+      let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in
+      List.iter handle_one w
     in 
     
     let rec eval x =
@@ -227,6 +227,7 @@ struct
         incr Goblintutil.evals;
         let _ = P.insert stable x in
         let old = X.get_value x in
+
         let tmp = do_side x (eq x (eval x) (side x)) in 
         let rstrt = RES.value && D.leq tmp old in
         let tmp = if (not LIM_WP.value) || HM.mem wpoint x then box' x (X.get_key x) old tmp else tmp in
@@ -430,6 +431,40 @@ struct
     r1
 end
 
+
+module MakeWLocResCMP =
+  functor (S:EqConstrSys) ->
+  functor (HM:Hash.H with type key = S.v) ->
+struct
+  module S1 = MakeBoxSolver (PropTrue) (PropTrue) (PropTrue) (S) (HM)
+  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (S) (HM)
+
+  let solve box st list = 
+    let r1 = S1.solve box st list in
+    let r2 = S2.solve box st list in
+    let eq, le, gr, uk = ref 0, ref 0, ref 0, ref 0 in
+    let f_eq () = incr eq(*; Printf.printf "="*) in
+    let f_le () = incr le(*; Printf.printf "<"*) in
+    let f_gr () = incr gr(*; Printf.printf ">"*) in
+    let f_uk () = incr uk(*; Printf.printf "?"*) in
+    let f k v1 = 
+      let v2 = try HM.find r2 k with Not_found -> S.Dom.bot () in
+      let b1 = S.Dom.leq v1 v2 in
+      let b2 = S.Dom.leq v2 v1 in
+      if b1 && b2 then
+        f_eq ()
+      else if b1 then
+        f_le ()
+      else if b2 then
+        f_gr ()
+      else 
+        f_uk ()
+    in
+    HM.iter f r1;
+    Printf.printf "eq=%d\tle=%d\tgr=%d\tuk=%d\n" !eq !le !gr !uk;
+    r1
+end
+
 let _ =
   let module MakeIsGenericEqBoxSolver : GenericEqBoxSolver = MakeBoxSolver (PropFalse) (PropFalse) (PropFalse) in
   ()
@@ -452,4 +487,8 @@ let _ =
   Selector.add_solver ("slr+locw", (module M6 : GenericGlobSolver));
   let module M7 = GlobSolverFromEqSolver(MakeWLocCMP) in
   Selector.add_solver ("cmpwloc", (module M7 : GenericGlobSolver));
+  let module M8 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropTrue) (PropTrue)) in
+  Selector.add_solver ("slr+locw+restart", (module M8 : GenericGlobSolver));
+  let module M9 = GlobSolverFromEqSolver(MakeWLocResCMP) in
+  Selector.add_solver ("cmpwlocres", (module M9 : GenericGlobSolver));
   
