@@ -405,7 +405,7 @@ module MakeWLocCMP =
   functor (S:EqConstrSys) ->
   functor (HM:Hash.H with type key = S.v) ->
 struct
-  module S1 = MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (PropFalse) (S) (HM)
+  module S1 = MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (PropTrue) (S) (HM)
   module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropFalse) (PropFalse) (S) (HM)
 
   let solve box st list = 
@@ -486,12 +486,11 @@ let _ =
   Selector.add_solver ("cmprest", (module M4 : GenericGlobSolver));
   let module M5 = GlobSolverFromEqSolver(MakeBoxSolverCMP) in
   Selector.add_solver ("cmpfwtn", (module M5 : GenericGlobSolver));
-  let module M6 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (PropFalse) ) in
+  let module M6 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (PropTrue) ) in
   Selector.add_solver ("slr+locw", (module M6 : GenericGlobSolver));
   let module M7 = GlobSolverFromEqSolver(MakeWLocCMP) in
-  Selector.add_solver ("cmpwloc", (module M7 : GenericGlobSolver));
-  let module M8 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropTrue) (PropTrue) (PropFalse) ) in
+  Selector.add_solver ("cmplocw", (module M7 : GenericGlobSolver));
+  let module M8 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropTrue) (PropTrue) (PropTrue) ) in
   Selector.add_solver ("slr+locw+restart", (module M8 : GenericGlobSolver));
   let module M9 = GlobSolverFromEqSolver(MakeWLocResCMP) in
-  Selector.add_solver ("cmpwlocres", (module M9 : GenericGlobSolver));
-  
+  Selector.add_solver ("cmplocwres", (module M9 : GenericGlobSolver));
