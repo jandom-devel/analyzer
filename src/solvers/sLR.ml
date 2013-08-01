@@ -688,6 +688,7 @@ struct
           let _ = if tswidening && i <= xi && TS.get_value x <= TS.get_value y then HM.replace wpoint x () in
           let _ = if oldwidening && i <= xi then HM.replace wpoint x () in 
           let _ = if newwidening && xi <= i then HM.replace wpoint y () in 
+          let _ = if localization && xi <= i then work := H.insert (!work) y; P.rem_item stable y in
           let _ = if nonfresh then () else solve y in
           let _ = L.add infl y x in
           X.get_value y
@@ -795,10 +796,9 @@ struct
             let h = List.fold_left H.insert (!work) w in
             let _ = work := h in
                List.iter (P.rem_item stable) w;   
-
- 	  (* is it possible to avoid removing wpoint here? *)
-          let _ = HM.remove wpoint x in  loop (X.get_key x) 
-        end 
+            let _ = if localization then HM.remove wpoint x in 
+               loop (X.get_key x)
+      end 
       end
         
     and loop a =  
