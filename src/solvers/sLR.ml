@@ -473,12 +473,12 @@ module MakeBoxSolverNew =
   functor (S:EqConstrSys) ->
   functor (HM:Hash.H with type key = S.v) ->
 struct
-  let priosum  = true	(* give priorities in increasing order *)
-  let oldorder = false  (* give priorities from the exit point of graphs *)
+  let priosum  = false         (* give priorities in increasing order *)
+  let oldorder = true          (* give priorities from the exit point of graphs *)
   let newwidening = true       (* use new widening *)
-  let oldwidening = false       (* use old widening *)
-  let tswidening = false      (* use timestamp widening *)
-  let localization = true     (* remove widening marking after evaluation *)
+  let oldwidening = false      (* use old widening *)
+  let tswidening = false       (* use timestamp widening *)
+  let localization = true      (* remove widening marking after evaluation *)
 
   let h_find_option h x =
     try Some (HM.find h x)
@@ -784,7 +784,7 @@ struct
 
         if D.eq tmp old then 
           let _ = if localization then HM.remove wpoint x in 
-          loop (X.get_key x)
+            loop (X.get_key x)
         else begin 
           let _ = X.set_value x tmp in
           if rstrt then 
@@ -830,7 +830,7 @@ module MakeSLRNewCMP =
   functor (S:EqConstrSys) ->
   functor (HM:Hash.H with type key = S.v) ->
 struct
-  module S1 = MakeBoxSolverNew (PropTrue)  (PropFalse) (S) (HM)
+  module S1 = MakeBoxSolverNew (PropTrue) (PropFalse) (S) (HM)
   module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (S) (HM)
   
   let solve box st list = 

@@ -3,7 +3,7 @@
     "verbose": false
   },
   "printstats": true,
-  "solver" : "cmplocw",
+  "solver" : "cmpslr++",
   "result" : "html",
   "ana" : {
     "int" : {
