@@ -12,6 +12,7 @@ module      PropFalse = struct let value = false end
 module MakeBoxSolver =
   functor (LIM_WP:BoolProp) -> 
   functor (RES:BoolProp) -> 
+  functor (LOC_W:BoolProp) ->
   functor (S:EqConstrSys) ->
   functor (HM:Hash.H with type key = S.v) ->
 struct
@@ -121,6 +122,7 @@ struct
   struct
     let sub = h_find_option 
     let update = HM.replace
+    let set    = HM.create 1024 
   end
         
   (** Helper module for the domain. *)
@@ -131,15 +133,14 @@ struct
      let cup = join
      let cap = meet
   end
-                
-  let solve box st list = 
+
+  let solve box st list =
     let stable = HM.create 1024 in
     let infl   = HM.create 1024 in
-    let set    = HM.create 1024 in
     let wpoint = HM.create 1024 in
     let work   = ref H.empty    in
         
-    let _ = List.iter (fun (x,v) -> XY.set_value (x,x) v; T.update set x (P.single x)) st in
+    let _ = List.iter (fun (x,v) -> XY.set_value (x,x) v; T.update T.set x (P.single x)) st in
     let _ = work := H.merge (H.from_list list) !work in 
     let _ = List.iter (fun x -> if (not LIM_WP.value) then L.add infl x x) list in 
     
@@ -160,33 +161,33 @@ struct
     (*let box' x xk y z = D.widen y (D.join y z) in*)
     let box' x xk y z = box x y z  in
     
-    let restart x = 
+    let restart x =
       let (sk,_) = X.get_index x in
       let rec handle_one x =
         let (k,_) = X.get_index x in
         let _ = work := H.insert !work x in
         let _ = P.rem_item stable x in
         if k >= sk then () else
-        let _ = X.set_value x (D.bot ()) in
-        (*ignore @@ Pretty.printf "  also restarting %d: %a\n" k S.Var.pretty_trace x;*)
-        let w = L.sub infl x in
-        let _ = L.rem_item infl x in
-        (*let _ = L.add infl x x in *)
-        List.iter handle_one w 
-      in 
+          let _ = X.set_value x (D.bot ()) in
+          (*ignore @@ Pretty.printf " also restarting %d: %a\n" k S.Var.pretty_trace x;*)
+          let w = L.sub infl x in
+          let _ = L.rem_item infl x in
+          (*let _ = L.add infl x x in *)
+          List.iter handle_one w
+      in
       (*ignore @@ Pretty.printf "restarting %d: %a\n" sk S.Var.pretty_trace x;*)
       let w = L.sub infl x in
       let _ = L.rem_item infl x in
-      let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in 
-      List.iter handle_one w 
+      let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in
+      List.iter handle_one w
     in 
     
     let rec eval x =
       let (xi,_) = X.get_index x in
       fun y ->
         let (i,nonfresh) = X.get_index y in
-        let _ = if i<=xi then HM.replace wpoint x () in
-        (* I think this  is better: let _ = if xi <= i then HM.replace wpoint y () in *)
+        let _ = if xi <= i then HM.replace wpoint y () in
+        let _ = if LOC_W.value && xi <= i then work := H.insert (!work) y; P.rem_item stable y in
         let _ = if nonfresh then () else solve y in
         let _ = L.add infl y x in
         X.get_value y
@@ -195,8 +196,8 @@ struct
       HM.replace wpoint y ();
       
       let _ = 
-        match T.sub set y with 
-          | None -> T.update set y (P.single x)
+        match T.sub T.set y with 
+          | None -> T.update T.set y (P.single x)
           | Some p -> P.insert p x
       in 
 
@@ -215,7 +216,7 @@ struct
       end                                               
 
     and do_side x a = 
-      match T.sub set x with 
+      match T.sub T.set x with 
         | None -> a
         | Some p -> 
             let xs = P.to_list p in 
@@ -227,11 +228,13 @@ struct
         incr Goblintutil.evals;
         let _ = P.insert stable x in
         let old = X.get_value x in
+
         let tmp = do_side x (eq x (eval x) (side x)) in 
         let rstrt = RES.value && D.leq tmp old in
         let tmp = if (not LIM_WP.value) || HM.mem wpoint x then box' x (X.get_key x) old tmp else tmp in
         if D.eq tmp old then 
-          loop (X.get_key x)
+	  let _ = if LOC_W.value then HM.remove wpoint x in
+             loop (X.get_key x)
         else begin 
           let _ = X.set_value x tmp in
 
@@ -244,7 +247,7 @@ struct
             let h = List.fold_left H.insert (!work) w in
             let _ = work := h in
                     List.iter (P.rem_item stable) w;
-                    
+            let _ = if LOC_W.value then HM.remove wpoint x in
           loop (X.get_key x) 
         end 
       end
@@ -279,17 +282,19 @@ module PhasesSolver =
 struct
   module S1 = 
   struct 
-    include MakeBoxSolver (PropFalse) (PropFalse) (S) (HM)
+    include MakeBoxSolver (PropTrue) (PropFalse) (PropFalse) (S) (HM)
   end
   module S2 = 
   struct
-    include MakeBoxSolver (PropFalse) (PropFalse) (S) (HM)
+    include MakeBoxSolver (PropTrue) (PropFalse) (PropFalse) (S) (HM)
   end
   
   let solve box st list = 
-    let r1 = S1.solve (fun _ x y -> S.Dom.widen x (S.Dom.join x y)) st list in
-    let st' = HM.fold (fun k v xs -> (k,v)::xs) r1 [] in
-    let r2 = S2.solve (fun _ x y -> S.Dom.narrow x y) st' list in
+    let _ = S1.solve (fun _ x y -> S.Dom.widen x (S.Dom.join x y)) st list in
+    S1.XY.HPM.iter (fun k v -> S2.XY.HPM.add S2.XY.xy k v) S1.XY.xy;
+    HM.iter (fun k v -> HM.add S2.X.vals k v) S1.X.vals;
+    HM.iter (fun k v -> HM.add S2.T.set k v) S1.T.set;
+    let r2 = S2.solve (fun _ x y -> S.Dom.narrow x y) [] list in
     r2
 end
 
@@ -298,7 +303,7 @@ module MakeBoxSolverCMP =
   functor (HM:Hash.H with type key = S.v) ->
 struct
   module S1 = PhasesSolver (S) (HM)
-  module S2 = MakeBoxSolver (PropFalse) (PropFalse) (S) (HM)
+  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropFalse) (S) (HM)
   
   let solve box st list = 
     let r1 = S1.solve box st list in
@@ -331,8 +336,8 @@ module MakeRestartSolverCMP =
   functor (S:EqConstrSys) ->
   functor (HM:Hash.H with type key = S.v) ->
 struct
-  module S1 = MakeBoxSolver (PropTrue) (PropTrue)  (S) (HM)
-  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (S) (HM)
+  module S1 = MakeBoxSolver (PropTrue) (PropTrue) (PropFalse) (S) (HM)
+  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropFalse) (S) (HM)
   
   let solve box st list = 
     let r1 = S1.solve box st list in
@@ -364,9 +369,43 @@ module MakeWdiffCMP =
   functor (S:EqConstrSys) ->
   functor (HM:Hash.H with type key = S.v) ->
 struct
-  module S1 = MakeBoxSolver (PropTrue)  (PropFalse) (S) (HM)
-  module S2 = MakeBoxSolver (PropFalse) (PropFalse) (S) (HM)
+  module S1 = MakeBoxSolver (PropTrue)  (PropFalse) (PropFalse) (S) (HM)
+  module S2 = MakeBoxSolver (PropFalse) (PropFalse) (PropFalse) (S) (HM)
   
+  let solve box st list =
+    let r1 = S1.solve box st list in
+    let r2 = S2.solve box st list in
+    let eq, le, gr, uk = ref 0, ref 0, ref 0, ref 0 in
+    let f_eq () = incr eq(*; Printf.printf "="*) in
+    let f_le () = incr le(*; Printf.printf "<"*) in
+    let f_gr () = incr gr(*; Printf.printf ">"*) in
+    let f_uk () = incr uk(*; Printf.printf "?"*) in
+    let f k v1 =
+      let v2 = try HM.find r2 k with Not_found -> S.Dom.bot () in
+      let b1 = S.Dom.leq v1 v2 in
+      let b2 = S.Dom.leq v2 v1 in
+      if b1 && b2 then 
+        f_eq ()
+      else if b1 then
+        f_le ()
+      else if b2 then
+        f_gr ()
+      else 
+        f_uk ()
+    in
+    HM.iter f r1;
+    Printf.printf "eq=%d\tle=%d\tgr=%d\tuk=%d\n" !eq !le !gr !uk;
+    r1
+end
+
+
+module MakeWLocCMP =
+  functor (S:EqConstrSys) ->
+  functor (HM:Hash.H with type key = S.v) ->
+struct
+  module S1 = MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (S) (HM)
+  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropFalse) (S) (HM)
+
   let solve box st list = 
     let r1 = S1.solve box st list in
     let r2 = S2.solve box st list in
@@ -379,7 +418,41 @@ struct
       let v2 = try HM.find r2 k with Not_found -> S.Dom.bot () in
       let b1 = S.Dom.leq v1 v2 in
       let b2 = S.Dom.leq v2 v1 in
-      if b1 && b2 then 
+      if b1 && b2 then
+        f_eq ()
+      else if b1 then
+        f_le ()
+      else if b2 then
+        f_gr ()
+      else 
+        f_uk ()
+    in
+    HM.iter f r1;
+    Printf.printf "eq=%d\tle=%d\tgr=%d\tuk=%d\n" !eq !le !gr !uk;
+    r1
+end
+
+
+module MakeWLocResCMP =
+  functor (S:EqConstrSys) ->
+  functor (HM:Hash.H with type key = S.v) ->
+struct
+  module S1 = MakeBoxSolver (PropTrue) (PropTrue) (PropTrue) (S) (HM)
+  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (S) (HM)
+
+  let solve box st list = 
+    let r1 = S1.solve box st list in
+    let r2 = S2.solve box st list in
+    let eq, le, gr, uk = ref 0, ref 0, ref 0, ref 0 in
+    let f_eq () = incr eq(*; Printf.printf "="*) in
+    let f_le () = incr le(*; Printf.printf "<"*) in
+    let f_gr () = incr gr(*; Printf.printf ">"*) in
+    let f_uk () = incr uk(*; Printf.printf "?"*) in
+    let f k v1 = 
+      let v2 = try HM.find r2 k with Not_found -> S.Dom.bot () in
+      let b1 = S.Dom.leq v1 v2 in
+      let b2 = S.Dom.leq v2 v1 in
+      if b1 && b2 then
         f_eq ()
       else if b1 then
         f_le ()
@@ -758,7 +831,7 @@ module MakeSLRNewCMP =
   functor (HM:Hash.H with type key = S.v) ->
 struct
   module S1 = MakeBoxSolverNew (PropTrue)  (PropFalse) (S) (HM)
-  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (S) (HM)
+  module S2 = MakeBoxSolver (PropTrue) (PropFalse) (PropTrue) (S) (HM)
   
   let solve box st list = 
     let r1 = S1.solve box st list in
@@ -788,14 +861,14 @@ struct
 end
 
 let _ =
-  let module MakeIsGenericEqBoxSolver : GenericEqBoxSolver = MakeBoxSolver (PropFalse) (PropFalse) in
+  let module MakeIsGenericEqBoxSolver : GenericEqBoxSolver = MakeBoxSolver (PropFalse) (PropFalse) (PropFalse) in
   ()
 
 let _ =
-  let module M = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropFalse)) in
+  let module M = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropFalse) (PropFalse)) in
   Selector.add_solver ("slr+", (module M : GenericGlobSolver));
   Selector.add_solver ("new", (module M : GenericGlobSolver));
-  let module M1 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropTrue)) in
+  let module M1 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropTrue) (PropFalse)) in
   Selector.add_solver ("restart", (module M1 : GenericGlobSolver));
   let module M3 = GlobSolverFromEqSolver(PhasesSolver) in
   Selector.add_solver ("fwtn", (module M3 : GenericGlobSolver));
@@ -803,8 +876,18 @@ let _ =
   Selector.add_solver ("cmpwdiff", (module M2 : GenericGlobSolver));
   let module M4 = GlobSolverFromEqSolver(MakeRestartSolverCMP) in
   Selector.add_solver ("cmprest", (module M4 : GenericGlobSolver));
-  let module M5 = GlobSolverFromEqSolver(MakeBoxSolverNew (PropTrue) (PropFalse)) in
-  Selector.add_solver ("slr++", (module M5 : GenericGlobSolver));
-  let module M6 = GlobSolverFromEqSolver(MakeSLRNewCMP) in
-  Selector.add_solver ("cmpslr++", (module M6 : GenericGlobSolver));
-  
+  let module M5 = GlobSolverFromEqSolver(MakeBoxSolverCMP) in
+  Selector.add_solver ("cmpfwtn", (module M5 : GenericGlobSolver));
+  let module M6 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropFalse) (PropTrue)) in
+  Selector.add_solver ("slr+locw", (module M6 : GenericGlobSolver));
+  let module M7 = GlobSolverFromEqSolver(MakeWLocCMP) in
+  Selector.add_solver ("cmplocw", (module M7 : GenericGlobSolver));
+  let module M8 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropTrue) (PropTrue)) in
+  Selector.add_solver ("slr+locw+restart", (module M8 : GenericGlobSolver));
+  let module M9 = GlobSolverFromEqSolver(MakeWLocResCMP) in
+  Selector.add_solver ("cmplocwres", (module M9 : GenericGlobSolver));
+  let module M10 = GlobSolverFromEqSolver(MakeBoxSolverNew (PropTrue) (PropFalse)) in
+  Selector.add_solver ("slr++", (module M10 : GenericGlobSolver));
+  let module M11 = GlobSolverFromEqSolver(MakeSLRNewCMP) in
+  Selector.add_solver ("cmpslr++", (module M11 : GenericGlobSolver));
+
