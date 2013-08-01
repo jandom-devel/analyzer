@@ -187,6 +187,7 @@ struct
       fun y ->
         let (i,nonfresh) = X.get_index y in
         let _ = if xi <= i then HM.replace wpoint y () in
+        let _ = if LOC_W.value && xi <= i then work := H.insert (!work) y; P.rem_item stable y in
         let _ = if nonfresh then () else solve y in
         let _ = L.add infl y x in
         X.get_value y
