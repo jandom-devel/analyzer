@@ -487,9 +487,9 @@ let _ =
   let module M6 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropFalse) (PropTrue)) in
   Selector.add_solver ("slr+locw", (module M6 : GenericGlobSolver));
   let module M7 = GlobSolverFromEqSolver(MakeWLocCMP) in
-  Selector.add_solver ("cmpwloc", (module M7 : GenericGlobSolver));
+  Selector.add_solver ("cmplocw", (module M7 : GenericGlobSolver));
   let module M8 = GlobSolverFromEqSolver(MakeBoxSolver (PropTrue) (PropTrue) (PropTrue)) in
   Selector.add_solver ("slr+locw+restart", (module M8 : GenericGlobSolver));
   let module M9 = GlobSolverFromEqSolver(MakeWLocResCMP) in
-  Selector.add_solver ("cmpwlocres", (module M9 : GenericGlobSolver));
+  Selector.add_solver ("cmplocwres", (module M9 : GenericGlobSolver));
   
