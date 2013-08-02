@@ -227,8 +227,9 @@ struct
       if not (P.has_item stable x) then begin
         incr Goblintutil.evals;
         let _ = P.insert stable x in
-        let old = X.get_value x in
-
+        let old = X.get_value x in        
+         if (!Errormsg.debugFlag) then ignore (Pretty.printf "SOLVING %a\n" S.Var.pretty_trace x);
+        if (!Errormsg.debugFlag) then HM.iter (fun v k -> ignore (Pretty.printf "key(%a) = %d\n" S.Var.pretty_trace v k)) X.keys; 
         let tmp = do_side x (eq x (eval x) (side x)) in 
         let rstrt = RES.value && D.leq tmp old in
         let tmp = if (not LIM_WP.value) || HM.mem wpoint x then box' x (X.get_key x) old tmp else tmp in
@@ -475,6 +476,7 @@ module MakeBoxSolverNew =
 struct
   let priosum  = false         (* give priorities in increasing order *)
   let oldorder = true          (* give priorities from the exit point of graphs *)
+  let depthfirst = false        (* use depth first ordering *)
   let newwidening = true       (* use new widening *)
   let oldwidening = false      (* use old widening *)
   let tswidening = false       (* use timestamp widening *)
@@ -662,12 +664,12 @@ struct
         let _ = work := H.insert !work x in
         let _ = P.rem_item stable x in
         if k >= sk then () else
-        let _ = X.set_value x (D.bot ()) in
-        (*ignore @@ Pretty.printf "  also restarting %d: %a\n" k S.Var.pretty_trace x;*)
-        let w = L.sub infl x in
-        let _ = L.rem_item infl x in
-        (*let _ = L.add infl x x in *)
-        List.iter handle_one w 
+          let _ = X.set_value x (D.bot ()) in
+          (*ignore @@ Pretty.printf "  also restarting %d: %a\n" k S.Var.pretty_trace x;*)
+          let w = L.sub infl x in
+          let _ = L.rem_item infl x in
+          (*let _ = L.add infl x x in *)
+          List.iter handle_one w 
       in 
       (*ignore @@ Pretty.printf "restarting %d: %a\n" sk S.Var.pretty_trace x;*)
       let w = L.sub infl x in
@@ -681,10 +683,6 @@ struct
       fun y ->       
 	if  X.fresh_key y then backeval2 x y else begin
           let (i,nonfresh) = X.get_index y in
-          (*qlet _ = if i <= xi && TS.get_value x <= TS.get_value y then begin
-             if (!Errormsg.debugFlag) then ignore ( Pretty.printf "backedge true: from %a with stamp %d\n" S.Var.pretty_trace y ( TS.get_value y));
- 	     HM.replace wpoint x () 
-	  end in*)
           let _ = if tswidening && i <= xi && TS.get_value x <= TS.get_value y then HM.replace wpoint x () in
           let _ = if oldwidening && i <= xi then HM.replace wpoint x () in 
           let _ = if newwidening && xi <= i then HM.replace wpoint y () in 
@@ -731,10 +729,10 @@ struct
        let (i, nonfresh) = X.get_index_opt y in 
        let _ = L.add infl y x in  
        let _ = L.add deps x y in     
-       if not nonfresh then begin 
+       if not nonfresh then begin
           let _ = eq y (backeval y) (backside y) in
-          let _ = if not oldorder && L.sub deps y == [] then entryp := y::(!entryp) in          	
-          let _ = if oldorder then  entryp := y::(!entryp) in
+          let _ = if not oldorder && L.sub deps y == [] then entryp := y::(!entryp) in
+          let _ = if oldorder then entryp := y::(!entryp) in
           X.get_value y
        end else
           X.get_value y
@@ -742,21 +740,40 @@ struct
     and backeval2 x y =
        entryp := [];
        let s = backeval x y in
-       let _ = makeprio (!entryp) []  in
+       let _ = if depthfirst then begin
+         let (l, _) = makepriodepth (!entryp) []  in
+         List.iter (fun v -> ignore (X.get_key v)) (List.rev l) 
+       end else begin
+         makeprio (!entryp) [] 
+       end in
        let _ = work := H.merge (H.from_list (!entryp)) !work in
        s
 
     and makeprio l mem =
-        if (!Errormsg.debugFlag) then  List.iter (fun v -> ignore (Pretty.printf "%a\n" S.Var.pretty_trace v)) l;
-	match l with
+        if (!Errormsg.debugFlag) then List.iter (fun v -> ignore (Pretty.printf "%a\n" S.Var.pretty_trace v)) l;
+        match l with
           | [] -> ()
           | x::l1 ->
-  	       let _ = X.get_key x in
-	       let newmem = x::mem  in
-	       let filtervar = fun v -> not (List.mem v newmem) in
-		let toadd = if oldorder then L.sub deps x else L.sub infl x in
-               makeprio (List.append  (List.rev (List.filter filtervar toadd)) l1) newmem
+       let _ = X.get_key x in
+       let newmem = x::mem in
+       let filtervar = fun v -> not (List.mem v newmem) in
+       let toadd = if oldorder then L.sub deps x else L.sub infl x in
+       makeprio (List.append (List.rev (List.filter filtervar toadd)) l1) newmem
 
+    and makepriodepth l mem =
+        if (!Errormsg.debugFlag) then  List.iter (fun v -> ignore (Pretty.printf "%a " S.Var.pretty_trace v)) l;
+        if (!Errormsg.debugFlag) then  ignore (Pretty.printf "\n");
+	match l with
+          | [] -> ([], mem)
+          | x::l1 ->
+	       if List.mem x mem then makepriodepth l1 mem else             
+	       let newmem = x::mem  in
+               (* reversing the children list seems to remove regressions but also progressions *)
+               let children = if oldorder then L.sub deps x else L.sub infl x in
+               let (l2, newmem2) = makepriodepth children newmem in
+	       let (l3, newmem3) = makepriodepth l1 newmem2 in
+               (List.append l2 (x::l3)), newmem3
+	     
     and backside x y d = ()
 
     and solve x = 
@@ -790,9 +807,9 @@ struct
           if rstrt then 
             restart x 
           else
-            let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in 
             let w = L.sub infl x in
             let _ = L.rem_item infl x in
+            let _ = if (not LIM_WP.value) || HM.mem wpoint x then L.add infl x x in 
             let h = List.fold_left H.insert (!work) w in
             let _ = work := h in
                List.iter (P.rem_item stable) w;   
@@ -848,10 +865,11 @@ struct
       if b1 && b2 then 
         f_eq ()
       else if b1 then 
+	 (* let _ =   ignore (Pretty.printf "Instr: %a\nSLR+\n%a\nSLR++\n%a\n" S.Var.pretty_trace k S.Dom.pretty v2 S.Dom.pretty  v1) in *)
         f_le ()
       else if b2 then
-	let _ =  if (!Errormsg.debugFlag) then ignore (Pretty.printf "Instr: %a\nSLR+\n%a\nSLR++\n%a\n" S.Var.pretty_trace k S.Dom.pretty v2 S.Dom.pretty v1) in
-          f_gr ()
+	let _ =   ignore (Pretty.printf "Instr: %a\nSLR+\n%a\nSLR++\n%a\n" S.Var.pretty_trace k S.Dom.pretty v2 S.Dom.pretty  v1) in  
+        f_gr ()
       else 
         f_uk ()
     in
